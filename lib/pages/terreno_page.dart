@@ -170,7 +170,6 @@ class _TerrenoPageState extends State<TerrenoPage> {
       table: 'usuarios',
       callback: (payload) {
         final data = payload.newRecord;
-        if (data == null) return;
 
         if (data['id'] != user.id && data['lat'] != null && data['lng'] != null) {
           setState(() {

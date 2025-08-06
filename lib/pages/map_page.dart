@@ -94,7 +94,6 @@ class _MapPageState extends State<MapPage> {
       table: 'usuarios',
       callback: (payload) {
         final data = payload.newRecord;
-        if (data == null) return;
 
         if (data['id'] != user.id && data['lat'] != null && data['lng'] != null) {
           setState(() {
