@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:geolocator/geolocator.dart';
 
 class TerrenoPage extends StatefulWidget {
   const TerrenoPage({super.key});
@@ -13,10 +14,45 @@ class TerrenoPage extends StatefulWidget {
 
 class _TerrenoPageState extends State<TerrenoPage> {
   final supabase = Supabase.instance.client;
+
   List<LatLng> puntos = [];
   double? area;
-
   String? _explicacionArea;
+
+  List<Marker> otherMarkers = [];
+  RealtimeChannel? channel;
+
+  LatLng? myPosition;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadOtherTopografos();
+    _subscribeToChanges();
+    _getCurrentLocation();
+  }
+
+  Future<void> _getCurrentLocation() async {
+    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) return;
+
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied ||
+        permission == LocationPermission.deniedForever) {
+      permission = await Geolocator.requestPermission();
+      if (permission != LocationPermission.whileInUse &&
+          permission != LocationPermission.always) {
+        return;
+      }
+    }
+
+    Position pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.best);
+
+    setState(() {
+      myPosition = LatLng(pos.latitude, pos.longitude);
+    });
+  }
 
   void _addPoint(LatLng point) {
     setState(() {
@@ -27,16 +63,32 @@ class _TerrenoPageState extends State<TerrenoPage> {
     });
   }
 
+  void _addCurrentLocationPoint() {
+    if (myPosition != null) {
+      _addPoint(myPosition!);
+    }
+  }
+
+  void _removeLastPoint() {
+    if (puntos.isNotEmpty) {
+      setState(() {
+        puntos.removeLast();
+        if (puntos.length >= 3) {
+          area = _calcularArea(puntos);
+        } else {
+          area = null;
+          _explicacionArea = null;
+        }
+      });
+    }
+  }
+
   double _calcularArea(List<LatLng> puntos) {
     double sum = 0;
     StringBuffer pasos = StringBuffer();
 
     pasos.writeln("📌 Se registraron ${puntos.length} puntos del polígono.\n");
-    pasos.writeln("📝 Cálculo con fórmula Shoelace:");
-    pasos.writeln("1. Multiplicar longitudes * latitudes sucesivas.");
-    pasos.writeln("2. Restar operaciones inversas.");
-    pasos.writeln("3. Tomar valor absoluto ÷ 2.");
-    pasos.writeln("4. Multiplicar por 111139 para m² aprox.\n");
+    pasos.writeln("📝 Fórmula Shoelace aplicada paso a paso:\n");
 
     for (int i = 0; i < puntos.length; i++) {
       int j = (i + 1) % puntos.length;
@@ -82,6 +134,71 @@ class _TerrenoPageState extends State<TerrenoPage> {
     }
   }
 
+  Future<void> _loadOtherTopografos() async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    final response = await supabase
+        .from('usuarios')
+        .select('id, nombre, lat, lng')
+        .not('lat', 'is', null)
+        .not('lng', 'is', null)
+        .neq('id', user.id);
+
+    setState(() {
+      otherMarkers = (response as List)
+          .map((e) => Marker(
+                point: LatLng(e['lat'], e['lng']),
+                width: 70,
+                height: 70,
+                child: const Icon(Icons.person_pin_circle,
+                    color: Colors.red, size: 36),
+              ))
+          .toList();
+    });
+  }
+
+  void _subscribeToChanges() {
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    channel = supabase.channel('usuarios-changes');
+
+    channel!.onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: 'usuarios',
+      callback: (payload) {
+        final data = payload.newRecord;
+        if (data == null) return;
+
+        if (data['id'] != user.id && data['lat'] != null && data['lng'] != null) {
+          setState(() {
+            otherMarkers.removeWhere((m) =>
+                m.point.latitude == data['lat'] && m.point.longitude == data['lng']);
+            otherMarkers.add(
+              Marker(
+                point: LatLng(data['lat'], data['lng']),
+                width: 70,
+                height: 70,
+                child: const Icon(Icons.person_pin_circle,
+                    color: Colors.red, size: 36),
+              ),
+            );
+          });
+        }
+      },
+    );
+
+    channel!.subscribe();
+  }
+
+  @override
+  void dispose() {
+    channel?.unsubscribe();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -94,31 +211,42 @@ class _TerrenoPageState extends State<TerrenoPage> {
         children: [
           FlutterMap(
             options: MapOptions(
-              initialCenter: LatLng(-0.1807, -78.4678), // Quito por defecto
-              initialZoom: 15,
+              center: myPosition ?? LatLng(-0.1807, -78.4678),
+              zoom: 15,
               onTap: (tapPosition, point) => _addPoint(point),
             ),
             children: [
               TileLayer(
-                urlTemplate:
-                    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.example.topografia_app',
               ),
               MarkerLayer(
-                markers: puntos
-                    .map(
-                      (p) => Marker(
-                        point: p,
-                        width: 50,
-                        height: 50,
-                        child: const Icon(
-                          Icons.location_on,
-                          color: Colors.blue,
-                          size: 30,
-                        ),
+                markers: [
+                  if (myPosition != null)
+                    Marker(
+                      point: myPosition!,
+                      width: 60,
+                      height: 60,
+                      child: const Icon(
+                        Icons.my_location,
+                        color: Colors.blue,
+                        size: 40,
                       ),
-                    )
-                    .toList(),
+                    ),
+                  ...puntos.map(
+                    (p) => Marker(
+                      point: p,
+                      width: 50,
+                      height: 50,
+                      child: const Icon(
+                        Icons.location_on,
+                        color: Colors.green,
+                        size: 30,
+                      ),
+                    ),
+                  ),
+                  ...otherMarkers,
+                ],
               ),
               if (puntos.length >= 3)
                 PolygonLayer(
@@ -133,9 +261,10 @@ class _TerrenoPageState extends State<TerrenoPage> {
                 ),
             ],
           ),
+
           if (area != null)
             Positioned(
-              bottom: 100,
+              bottom: 200,
               left: 20,
               right: 20,
               child: Card(
@@ -156,24 +285,60 @@ class _TerrenoPageState extends State<TerrenoPage> {
             ),
         ],
       ),
-      bottomNavigationBar: Padding(
-        padding: const EdgeInsets.all(14.0),
-        child: ElevatedButton.icon(
-          onPressed: _guardarTerreno,
-          icon: const Icon(Icons.save, color: Colors.white),
-          label: const Text("Guardar Terreno"),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.green.shade700,
-            foregroundColor: Colors.white,
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            textStyle:
-                const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(12.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ElevatedButton.icon(
+                onPressed: _guardarTerreno,
+                icon: const Icon(Icons.save, color: Colors.white),
+                label: const Text("Guardar Terreno"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.green.shade700,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(double.infinity, 50),
+                  textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              ElevatedButton.icon(
+                onPressed: _addCurrentLocationPoint,
+                icon: const Icon(Icons.add_location, color: Colors.white),
+                label: const Text("Agregar mi ubicación"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue.shade700,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(double.infinity, 50),
+                  textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              ElevatedButton.icon(
+                onPressed: _removeLastPoint,
+                icon: const Icon(Icons.delete, color: Colors.white),
+                label: const Text("Borrar último punto"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.red.shade700,
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(double.infinity, 50),
+                  textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
     );
   }
 }
-

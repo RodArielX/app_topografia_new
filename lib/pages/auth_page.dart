@@ -19,17 +19,21 @@ class _AuthPageState extends State<AuthPage> {
   String mensaje = "";
 
   Future<void> _handleAuth() async {
+    setState(() {
+      mensaje = "";
+    });
+
     try {
       if (isLogin) {
         await _authService.signIn(
-          _emailController.text,
-          _passwordController.text,
+          _emailController.text.trim(),
+          _passwordController.text.trim(),
         );
       } else {
         await _authService.signUp(
-          _emailController.text,
-          _passwordController.text,
-          _nombreController.text,
+          _emailController.text.trim(),
+          _passwordController.text.trim(),
+          _nombreController.text.trim(),
         );
       }
 
@@ -41,7 +45,12 @@ class _AuthPageState extends State<AuthPage> {
       }
     } catch (e) {
       setState(() {
-        mensaje = "❌ Error: $e";
+        // Mostrar el mensaje personalizado que viene de AuthService
+        if (e.toString().contains("Confirma tu email")) {
+          mensaje = "⚠️ Confirma tu email e inicia sesión.";
+        } else {
+          mensaje = "❌ Error: ${e.toString()}";
+        }
       });
     }
   }
@@ -80,7 +89,6 @@ class _AuthPageState extends State<AuthPage> {
                     ),
                   ),
                   const SizedBox(height: 20),
-
                   if (!isLogin)
                     TextField(
                       controller: _nombreController,
@@ -93,7 +101,6 @@ class _AuthPageState extends State<AuthPage> {
                       ),
                     ),
                   if (!isLogin) const SizedBox(height: 16),
-
                   TextField(
                     controller: _emailController,
                     decoration: InputDecoration(
@@ -103,9 +110,9 @@ class _AuthPageState extends State<AuthPage> {
                         borderRadius: BorderRadius.circular(12),
                       ),
                     ),
+                    keyboardType: TextInputType.emailAddress,
                   ),
                   const SizedBox(height: 16),
-
                   TextField(
                     controller: _passwordController,
                     obscureText: true,
@@ -118,7 +125,6 @@ class _AuthPageState extends State<AuthPage> {
                     ),
                   ),
                   const SizedBox(height: 24),
-
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
@@ -136,9 +142,7 @@ class _AuthPageState extends State<AuthPage> {
                       ),
                     ),
                   ),
-
                   const SizedBox(height: 12),
-
                   TextButton(
                     onPressed: () => setState(() => isLogin = !isLogin),
                     child: Text(
@@ -148,7 +152,6 @@ class _AuthPageState extends State<AuthPage> {
                       style: TextStyle(color: themeColor),
                     ),
                   ),
-
                   if (mensaje.isNotEmpty) ...[
                     const SizedBox(height: 12),
                     Text(
@@ -166,5 +169,3 @@ class _AuthPageState extends State<AuthPage> {
     );
   }
 }
-
-

@@ -19,12 +19,10 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     _loadUserRole();
-    // 🔹 Ya no llamamos a startLocationService(), 
-    // porque WorkManager ya quedó configurado en main.dart
   }
 
   Future<void> _loadUserRole() async {
-    final user = _authService.currentUser;
+    final user = _authService.currentUser; // ✅ ahora funciona
     if (user == null) return;
 
     final response = await Supabase.instance.client
@@ -41,7 +39,6 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     if (rol == null) {
-      // Pantalla de carga estilizada
       return Scaffold(
         backgroundColor: Colors.blueAccent,
         body: Center(
@@ -66,10 +63,13 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
+    // Si es admin -> va al panel de administración
     if (rol == 'admin') {
       return const AdminPage();
     } else {
+      // Caso contrario -> topógrafo (mapa en tiempo real)
       return const MapPage();
     }
   }
 }
+

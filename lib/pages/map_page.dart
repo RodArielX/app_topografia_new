@@ -17,14 +17,19 @@ class MapPage extends StatefulWidget {
 class _MapPageState extends State<MapPage> {
   final supabase = Supabase.instance.client;
   LatLng? myPosition;
+  List<Marker> otherMarkers = [];
+  RealtimeChannel? channel;
 
   @override
   void initState() {
     super.initState();
-    _getCurrentLocation();
+    _getCurrentLocation().then((_) {
+      _updateMyPositionInDB();
+      _loadOtherTopografos();
+      _subscribeToChanges();
+    });
   }
 
-  /// Obtiene la ubicación actual del dispositivo (solo para mostrar en el mapa)
   Future<void> _getCurrentLocation() async {
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) return;
@@ -42,6 +47,76 @@ class _MapPageState extends State<MapPage> {
     });
   }
 
+  Future<void> _updateMyPositionInDB() async {
+    final user = supabase.auth.currentUser;
+    if (user != null && myPosition != null) {
+      await supabase.from('usuarios').update({
+        'lat': myPosition!.latitude,
+        'lng': myPosition!.longitude,
+        'last_update': DateTime.now().toIso8601String(),
+      }).eq('id', user.id);
+    }
+  }
+
+  Future<void> _loadOtherTopografos() async {
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    final response = await supabase
+        .from('usuarios')
+        .select('id, nombre, lat, lng')
+        .not('lat', 'is', null)
+        .not('lng', 'is', null)
+        .neq('id', user.id);
+
+    setState(() {
+      otherMarkers = (response as List)
+          .map((e) => Marker(
+                point: LatLng(e['lat'], e['lng']),
+                width: 80,
+                height: 80,
+                child: const Icon(Icons.person_pin_circle,
+                    color: Colors.red, size: 40),
+              ))
+          .toList();
+    });
+  }
+
+  void _subscribeToChanges() {
+    final user = supabase.auth.currentUser;
+    if (user == null) return;
+
+    channel = supabase.channel('usuarios-changes');
+
+    channel!.onPostgresChanges(
+      event: PostgresChangeEvent.all,
+      schema: 'public',
+      table: 'usuarios',
+      callback: (payload) {
+        final data = payload.newRecord;
+        if (data == null) return;
+
+        if (data['id'] != user.id && data['lat'] != null && data['lng'] != null) {
+          setState(() {
+            otherMarkers.removeWhere((m) =>
+                m.point.latitude == data['lat'] && m.point.longitude == data['lng']);
+            otherMarkers.add(
+              Marker(
+                point: LatLng(data['lat'], data['lng']),
+                width: 80,
+                height: 80,
+                child: const Icon(Icons.person_pin_circle,
+                    color: Colors.red, size: 40),
+              ),
+            );
+          });
+        }
+      },
+    );
+
+    channel!.subscribe();
+  }
+
   Future<void> _logout(BuildContext context) async {
     await supabase.auth.signOut();
     if (context.mounted) {
@@ -50,6 +125,12 @@ class _MapPageState extends State<MapPage> {
         MaterialPageRoute(builder: (_) => const AuthPage()),
       );
     }
+  }
+
+  @override
+  void dispose() {
+    channel?.unsubscribe();
+    super.dispose();
   }
 
   @override
@@ -69,7 +150,8 @@ class _MapPageState extends State<MapPage> {
         ],
       ),
       drawer: Drawer(
-        child: Column(
+        child: ListView(
+          padding: EdgeInsets.zero,
           children: [
             UserAccountsDrawerHeader(
               decoration: BoxDecoration(color: Colors.blue.shade700),
@@ -128,7 +210,8 @@ class _MapPageState extends State<MapPage> {
               ),
               children: [
                 TileLayer(
-                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  subdomains: const ['a', 'b', 'c'],
                   userAgentPackageName: 'com.example.topografia_app',
                 ),
                 MarkerLayer(
@@ -140,6 +223,7 @@ class _MapPageState extends State<MapPage> {
                       child: const Icon(Icons.location_on,
                           color: Colors.blue, size: 42),
                     ),
+                    ...otherMarkers,
                   ],
                 ),
               ],
@@ -147,10 +231,12 @@ class _MapPageState extends State<MapPage> {
       floatingActionButton: FloatingActionButton.extended(
         backgroundColor: Colors.blue.shade700,
         icon: const Icon(Icons.my_location, color: Colors.white),
-        label: const Text("Mi ubicación"),
-        onPressed: _getCurrentLocation,
+        label: const Text("Actualizar"),
+        onPressed: () async {
+          await _getCurrentLocation();
+          await _updateMyPositionInDB();
+        },
       ),
     );
   }
 }
-

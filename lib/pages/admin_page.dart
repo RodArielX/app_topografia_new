@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import 'auth_page.dart';
 import 'admin_locations.dart';
 import 'lista_terrenos_page.dart';
+import '../services/auth_service.dart';
 
 class AdminPage extends StatefulWidget {
   const AdminPage({super.key});
@@ -12,10 +12,10 @@ class AdminPage extends StatefulWidget {
 }
 
 class _AdminPageState extends State<AdminPage> {
-  final supabase = Supabase.instance.client;
+  final AuthService _authService = AuthService();
 
   Future<void> _logout(BuildContext context) async {
-    await supabase.auth.signOut();
+    await _authService.signOut();
     if (context.mounted) {
       Navigator.pushReplacement(
         context,
@@ -25,16 +25,17 @@ class _AdminPageState extends State<AdminPage> {
   }
 
   Future<void> _deleteUser(String id) async {
-    await supabase.from('usuarios').delete().eq('id', id);
+    await _authService.supabase.from('usuarios').delete().eq('id', id);
   }
 
   Future<void> _toggleActivo(String id, bool activo) async {
-    await supabase.from('usuarios').update({'activo': !activo}).eq('id', id);
+    await _authService.supabase.from('usuarios').update({'activo': !activo}).eq('id', id);
   }
 
   void _showAddUserDialog(BuildContext context) {
     final nombreController = TextEditingController();
     final emailController = TextEditingController();
+    final passwordController = TextEditingController();
     final rolController = TextEditingController(text: "topografo");
 
     showDialog(
@@ -43,42 +44,54 @@ class _AdminPageState extends State<AdminPage> {
         return AlertDialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           title: const Text("➕ Agregar Usuario"),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nombreController,
-                decoration: const InputDecoration(
-                  labelText: "Nombre",
-                  prefixIcon: Icon(Icons.person),
-                  border: OutlineInputBorder(),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nombreController,
+                  decoration: const InputDecoration(
+                    labelText: "Nombre",
+                    prefixIcon: Icon(Icons.person),
+                    border: OutlineInputBorder(),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: emailController,
-                decoration: const InputDecoration(
-                  labelText: "Email",
-                  prefixIcon: Icon(Icons.email),
-                  border: OutlineInputBorder(),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: emailController,
+                  decoration: const InputDecoration(
+                    labelText: "Email",
+                    prefixIcon: Icon(Icons.email),
+                    border: OutlineInputBorder(),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 12),
-              DropdownButtonFormField(
-                value: "topografo",
-                items: const [
-                  DropdownMenuItem(value: "topografo", child: Text("Topógrafo")),
-                  DropdownMenuItem(value: "admin", child: Text("Administrador")),
-                ],
-                onChanged: (value) {
-                  rolController.text = value.toString();
-                },
-                decoration: const InputDecoration(
-                  labelText: "Rol",
-                  border: OutlineInputBorder(),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: passwordController,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: "Contraseña",
+                    prefixIcon: Icon(Icons.lock),
+                    border: OutlineInputBorder(),
+                  ),
                 ),
-              ),
-            ],
+                const SizedBox(height: 12),
+                DropdownButtonFormField(
+                  value: "topografo",
+                  items: const [
+                    DropdownMenuItem(value: "topografo", child: Text("Topógrafo")),
+                    DropdownMenuItem(value: "admin", child: Text("Administrador")),
+                  ],
+                  onChanged: (value) {
+                    rolController.text = value.toString();
+                  },
+                  decoration: const InputDecoration(
+                    labelText: "Rol",
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(
@@ -87,13 +100,30 @@ class _AdminPageState extends State<AdminPage> {
             ),
             ElevatedButton.icon(
               onPressed: () async {
-                await supabase.from('usuarios').insert({
-                  'nombre': nombreController.text,
-                  'email': emailController.text,
-                  'rol': rolController.text,
-                  'activo': true,
-                });
-                if (context.mounted) Navigator.pop(ctx);
+                final email = emailController.text.trim();
+                final password = passwordController.text.trim();
+                final nombre = nombreController.text.trim();
+                final rol = rolController.text.trim();
+
+                if (email.isEmpty || password.isEmpty || nombre.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Por favor, complete todos los campos.")),
+                  );
+                  return;
+                }
+
+                try {
+                  await _authService.signUp(email, password, nombre);
+
+                  if (context.mounted) Navigator.pop(ctx);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Usuario creado correctamente.")),
+                  );
+                } catch (e) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text("Error al crear usuario: $e")),
+                  );
+                }
               },
               icon: const Icon(Icons.check),
               label: const Text("Agregar"),
@@ -133,9 +163,8 @@ class _AdminPageState extends State<AdminPage> {
         ),
         body: TabBarView(
           children: [
-            // 🔹 Lista de usuarios con tarjetas
             StreamBuilder<List<Map<String, dynamic>>>(
-              stream: supabase.from('usuarios').stream(primaryKey: ['id']).execute(),
+              stream: _authService.supabase.from('usuarios').stream(primaryKey: ['id']).execute(),
               builder: (context, snapshot) {
                 if (!snapshot.hasData) {
                   return const Center(child: CircularProgressIndicator());
@@ -143,9 +172,7 @@ class _AdminPageState extends State<AdminPage> {
 
                 final usuarios = snapshot.data!;
                 if (usuarios.isEmpty) {
-                  return const Center(
-                    child: Text("No hay usuarios registrados 👥"),
-                  );
+                  return const Center(child: Text("No hay usuarios registrados 👥"));
                 }
 
                 return ListView.builder(
@@ -160,7 +187,8 @@ class _AdminPageState extends State<AdminPage> {
                       ),
                       elevation: 4,
                       child: ListTile(
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        contentPadding:
+                            const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                         leading: CircleAvatar(
                           backgroundColor: user['activo'] ? Colors.green : Colors.red,
                           child: Icon(
@@ -197,11 +225,7 @@ class _AdminPageState extends State<AdminPage> {
                 );
               },
             ),
-
-            // 🔹 Ubicaciones
             const AdminLocations(),
-
-            // 🔹 Terrenos
             const ListaTerrenosPage(),
           ],
         ),
@@ -216,4 +240,3 @@ class _AdminPageState extends State<AdminPage> {
     );
   }
 }
-
